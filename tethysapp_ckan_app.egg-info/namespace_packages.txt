@@ -1,2 +1,0 @@
-tethysapp
-tethysapp.ckan_app
