@@ -1,0 +1,702 @@
+NFIE TRAINING - CKAN, File Management, and Git
+
+Using Two APIS Today:
+
+Dataset Storage API
+Tethys Gizmos API - Highcharts
+
+Topics:
+
+CKAN
+Highcharts
+Advanced Forms
+Workspaces
+User
+Parse RAPID Output from ECMWF Workflow
+
+#### 1. Install dependencies
+
+        $ . t
+(tethys)$ sudo apt-get install python-dev zlib1g-dev libhdf5-serial-dev libnetcdf-dev 
+(tethys)$ pip install numpy netCDF4
+
+#### 2. Start Tethys Development Server
+
+(tethys)$ tethys manage start
+
+#### 3. Browse to http://localhost:8000 in a web browser and perform the following steps to register CKAN:
+
+a. Login if not already using an admin user:
+   
+   Username: tethys
+   Password: pass
+
+b. Using the drop down menu in the top-right hand corner select "Site Admin".
+
+c. Select "Dataset Services" from the "Tethys Services" panel.
+
+d. Click the "Add Dataset Service" button and fill out the form:
+
+   Name: nfie
+   Engine: CKAN
+   Endpoint: http://nfie-ckan.cloudapp.net/api/3/action
+   Apikey: ee8313d3-4129-46ab-b149-849bc3bc107e
+   Username: <leave blank>
+   Password: <leave blank>
+
+e. Press the "Save" to save changes.
+
+!!!!!!!!!!!!!!!! CONCEPT: INTRODUCE CKAN AND SHOW WHERE TO GET API KEY !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+#### 4. Create a new app
+
+a. Switch back to the terminal and press CTRL-C to stop the development server.
+
+b. Create a new app using the following command:
+
+(tethys)$ cd ~/tethysdev
+(tethys)$ tethys scaffold ckan_app
+
+c. Install the app for development:
+
+(tethys)$ cd tethysapp-ckan_app
+(tethys)$ python setup.py develop
+
+d. Start the development server again and browse to the new app:
+
+(tethys)$ tethys manage start
+
+e. Open the new app project in Sublime using File > Open Folder..., select the "tethysapp-ckan_app", and press "Open".
+
+################ SHOW A LIST OF NFIE WATERSHEDS IN CKAN #####################
+
+### controllers.py
+
+from tethys_apps.sdk import get_dataset_engine
+
+
+def home(request):
+    """
+    Controller for the app home page.
+    """
+    ckan_engine = get_dataset_engine(name="nfie")
+
+    response = ckan_engine.list_datasets(console=True)
+
+    erfp_dataset_names = []
+
+    if response['success']:
+        for dataset_name in response['result']:
+            if 'erfp' in dataset_name:
+                erfp_dataset_names.append(dataset_name)
+
+    unique_watersheds = []
+
+    for erfp_dataset_name in erfp_dataset_names:
+        parts = erfp_dataset_name.split('-')
+        no_time = '-'.join(parts[:3])
+        
+        if no_time not in unique_watersheds:
+            unique_watersheds.append(no_time)
+        
+    context = {'unique_watersheds': unique_watersheds}
+
+    return render(request, 'ckan_app/home.html', context)
+
+### home.html
+
+{% extends "ckan_app/base.html" %}
+
+{% block app_content %}
+  <h1>NFIE Watersheds</h1>
+  <ul>
+    {% for watershed in unique_watersheds %}
+        <li>{{ watershed }}</li>
+    {% endfor %}
+  </ul>
+{% endblock %}
+
+
+################ CHANGE LIST OF WATERSHEDS TO A SELECT INPUT WITH FORM ###################
+
+### controllers.py
+from tethys_apps.sdk.gizmos import *
+
+
+def home(request):
+    """
+    Controller for the app home page.
+    """
+    ...
+
+    watershed_options = []
+
+    for watershed in unique_watersheds:
+        parts = watershed.split('-')
+        pretty_watershed_name = parts[1].replace('_', ' ').title()
+        pretty_subbasin_name = parts[2].replace('_', ' ').title()
+        combined = pretty_watershed_name + ', ' + pretty_subbasin_name
+
+        watershed_options.append((combined, watershed))
+
+    select_options = SelectInput(display_text='Watershed',
+                                 name='watershed',
+                                 multiple=False,
+                                 options=watershed_options)
+
+    context = {'unique_watersheds': unique_watersheds,
+               'select_options': select_options}
+
+    return render(request, 'ckan_app/home.html', context)
+
+### home.html
+
+{% extends "ckan_app/base.html" %}
+{% load tethys_gizmos %}
+
+{% block app_content %}
+  <h1>Select a Watershed</h1>
+  <form action="" method="post" id="watershed-form">
+      {% csrf_token %}
+      {% gizmo select_input select_options %}
+      <input name="submit" type="submit" class="btn btn-default" form="watershed-form">
+  </form>
+{% endblock %}
+
+########################### BUILD OUT MULTI-STAGED FORM ###########################
+
+### home.html
+
+{% extends "ckan_app/base.html" %}
+{% load tethys_gizmos %}
+
+{% block app_content %}
+  <h1>Select a Watershed</h1>
+  <form action="" method="post" id="watershed-form">
+      {% csrf_token %}
+      {% gizmo select_input select_options %}
+
+      {% if show_time %}
+        {% gizmo select_input time_select_options %}
+      {% endif %}
+      <input name="submit" type="submit" class="btn btn-default" form="watershed-form">
+  </form>
+{% endblock %}
+
+### controllers.py
+
+def home (request):
+    """
+    Controller for the app home page.
+    """
+
+    ...
+
+    time_options = []
+    show_time = False
+
+    if request.POST and 'watershed' in request.POST:
+        selected_watershed = request.POST['watershed']
+        show_time = True
+
+        for dataset_name in erfp_dataset_names:
+            if selected_watershed in dataset_name:
+                parts = dataset_name.split('-')
+                time = parts[-1]
+                year = time[:4]
+                month = time[4:6]
+                day = time[6:8]
+                hour = time[9:11]
+                pretty_time = '{0}/{1}/{2} @ {3}'.format(month, day, year, hour)
+                time_options.append((pretty_time, dataset_name))
+
+
+    time_select_options = SelectInput(display_text='Time',
+                                      name='time',
+                                      multiple=False,
+                                      options=time_options)
+
+    context = {'unique_watersheds': unique_watersheds,
+               'select_options': select_options,
+               'time_select_options': time_select_options,
+               'show_time': show_time}
+
+    return render(request, 'ckan_app/home.html', context)
+
+#################### MAKE FORM MORE FOOL PROOF ###############################
+
+### controllers.py
+
+def home(request):
+    """
+    Controller for the app home page.
+    """
+    ...
+    
+    selected_watershed = ''
+
+    if request.POST and 'watershed' in request.POST:
+        selected_watershed = request.POST['watershed']
+
+    ...
+
+    context = {'unique_watersheds': unique_watersheds,
+               'select_options': select_options,
+               'time_select_options': time_select_options,
+               'show_time': show_time,
+               'selected_watershed': selected_watershed}
+
+    return render(request, 'ckan_app/home.html', context)
+
+### home.html
+
+{% extends "ckan_app/base.html" %}
+{% load tethys_gizmos %}
+
+{% block app_content %}
+  <h1>Select a Watershed</h1>
+  <form action="" method="post" id="watershed-form">
+      {% csrf_token %}
+
+      {% if selected_watershed %}
+        <b>Watershed</b>
+        <h5>{{ selected_watershed }}</h5>
+      {% else %}
+        {% gizmo select_input select_options %}
+      {% endif %}
+
+      {% if show_time %}
+        {% gizmo select_input time_select_options %}
+      {% endif %}
+
+      <input name="submit" type="submit" class="btn btn-default" form="watershed-form">
+  </form>
+{% endblock %}
+
+
+
+##################### CREATE NEW PAGE FOR SHOWING THE FORECASTS ###################################
+
+### forecasts.html
+
+{% extends "ckan_app/base.html" %}
+
+{% block app_content %}
+    <h1>Forecasts</h1>
+{% endblock %}
+
+
+### controllers.py
+
+def forecasts(request):
+    """
+    Controller for forecasts
+    """
+
+    context = {}
+
+    return render(request, 'ckan_app/forecasts.html', context)
+
+### app.py
+
+UrlMap(name='forecasts',
+       url='ckan-app/{watershed_dataset}/forecasts',
+       controller='ckan_app.controllers.forecasts'),
+
+### controllers.py
+
+def forecasts(request, watershed_dataset):
+    """
+    Controller for forecasts
+    """
+    parts = watershed_dataset.split('-')
+    pretty_watershed_name = parts[1].replace('_', ' ').title()
+    pretty_subbasin_name = parts[2].replace('_', ' ').title()
+    title = pretty_watershed_name + ', ' + pretty_subbasin_name
+
+    time = parts[-1]
+    year = time[:4]
+    month = time[4:6]
+    day = time[6:8]
+    hour = time[9:11]
+    pretty_time = '{0}/{1}/{2} @ {3}'.format(month, day, year, hour)
+
+
+    context = {'title': title,
+               'pretty_time': pretty_time}
+
+    return render(request, 'ckan_app/forecasts.html', context)
+
+### forecasts.html
+
+{% extends "ckan_app/base.html" %}
+
+{% block app_content %}
+    <h1>Forecasts</h1>
+    <h3>Watershed: {{ title }}</h3>
+    <h3>Issued at: {{ pretty_time }}</h3>
+{% endblock %}
+
+
+TEST WITH: erfp-nfie_ca_timally-south_ca-20150624t00
+
+
+################# HANDLE POST WITH TIME AND REDIRECT TO FORECAST PAGE #############################
+
+### controllers.py
+
+from django.shortcuts import render, redirect
+
+def home(request):
+    """
+    Controller for the app home page.
+    """
+    ...
+
+    if request.POST and 'time' in request.POST:
+        selected_dataset = request.POST['time']
+        return redirect('ckan_app:forecasts', watershed_dataset=selected_dataset)
+
+    ...
+
+    return render(request, 'ckan_app/home.html', context)
+
+### base.html
+
+...
+
+{% block app_navigation_items %}
+  <li><a href="{% url 'ckan_app:home' %}">Start Over</a></li>
+{% endblock %}
+
+...
+
+################################# LIST RESOURCES ON THE PAGE ################################
+
+### controllers.py
+
+def forecasts(request, watershed_dataset):
+    """
+    Controller for forecasts
+    """
+    ...
+
+    ckan_engine = get_dataset_engine(name='nfie')
+
+    response = ckan_engine.get_dataset(dataset_id=watershed_dataset)
+
+    buttons = []
+
+    if response['success']:
+        dataset = response['result']
+        
+        for resource in dataset['resources']:
+            button = Button(display_text=resource['name'],
+                            href=resource['url'])
+            buttons.append(button)
+
+
+
+    context = {'title': title,
+               'pretty_time': pretty_time,
+               'buttons': buttons}
+
+    return render(request, 'ckan_app/forecasts.html', context)
+
+### forecasts.html
+
+{% extends "ckan_app/base.html" %}
+{% load tethys_gizmos %}
+
+{% block app_content %}
+    <h1>Forecasts</h1>
+    <h3>Watershed: {{ title }}</h3>
+    <h3>Issued at: {{ pretty_time }}</h3>
+    
+    {% for button in buttons %}
+        {% gizmo button button %}
+    {% endfor %}
+
+{% endblock %}
+
+################################# ADD A PLOT PAGE ##########################################
+
+
+### app.py
+
+UrlMap(name='plot',
+       url='ckan-app/{resource_id}/plot',
+       controller='ckan_app.controllers.plot'),
+
+### plot.html
+
+{% extends "ckan_app/base.html" %}
+
+{% block app_content %}
+    <h1>Streamflow Forecast</h1>
+    {{ resource }}
+{% endblock %}
+
+### controllers.py
+
+def plot(request, resource_id):
+    """
+    Controller for forecast plots
+    """
+    ckan_engine = get_dataset_engine(name='nfie')
+
+    response = ckan_engine.get_resource(resource_id=resource_id)
+
+    resource = ''
+    
+    if response['success']:
+        resource = response['result']
+
+    context = {'resource': resource}
+
+    return render(request, 'ckan_app/plot.html', context)
+
+TEST WITH: http://localhost:8000/apps/ckan-app/394a225f-9b3b-448b-b99c-301939e813d5/plot/
+
+### controllers.py
+
+def plot(request, resource_id):
+    """
+    Controller for forecast plots
+    """
+    ckan_engine = get_dataset_engine(name='nfie')
+
+    response = ckan_engine.get_resource(resource_id=resource_id)
+
+    title = 'No Forecast Found'
+    pretty_time = ''
+    forecast_number = ''
+
+    if response['success']:
+        resource = response['result']
+
+        resource_name = resource['name']
+        parts = resource_name.split('-')
+        pretty_watershed_name = parts[1].replace('_', ' ').title()
+        pretty_subbasin_name = parts[2].replace('_', ' ').title()
+        title = pretty_watershed_name + ', ' + pretty_subbasin_name
+
+        time = parts[-2]
+        year = time[:4]
+        month = time[4:6]
+        day = time[6:8]
+        hour = time[9:11]
+        pretty_time = '{0}/{1}/{2} @ {3}'.format(month, day, year, hour)
+
+        forecast_number = parts[-1]
+
+    context = {'title': title,
+               'pretty_time': pretty_time,
+               'forecast_number': forecast_number}
+
+    return render(request, 'ckan_app/plot.html', context)
+
+
+### plot.html
+
+{% extends "ckan_app/base.html" %}
+
+{% block app_content %}
+    <h1>Streamflow Forecast</h1>
+    <h6>Watershed: {{ title }}</h6>
+    <h6>Issued at: {{ pretty_time }}</h6>
+    <h6>Forecast Number: {{ forecast_number }}</h6>
+{% endblock %}
+
+TEST WITH: http://localhost:8000/apps/ckan-app/394a225f-9b3b-448b-b99c-301939e813d5/plot/
+
+
+################### WIRE UP BUTTONS ON FORECAST PAGE TO LINK TO PLOT PAGE ################################
+
+### controllers.py
+
+from django.core.urlresolvers import reverse
+
+def forecasts(request, watershed_dataset):
+    """
+    Controller for forecasts
+    """
+    ...
+
+    if response['success']:
+        dataset = response['result']
+        
+        for resource in dataset['resources']:
+            plot_url = reverse('ckan_app:plot', args=[resource['id']])
+            button = Button(display_text=resource['name'],
+                            href=plot_url)
+            buttons.append(button)
+
+    context = {'title': title,
+               'pretty_time': pretty_time,
+               'buttons': buttons}
+
+    return render(request, 'ckan_app/forecasts.html', context)
+
+
+########## CREATES A USER WORKSPACE DIRECTORY AND DOWNLOAD RESOURCE ###############################
+
+### controllers.py
+
+import os
+import urllib
+import tarfile
+
+def plot(request, watershed_dataset, forecast_resource):
+    """
+    Controller for forecast plots
+    """
+    ...
+
+    if response['success']:
+        ...
+
+        current_username = request.user.username
+        controllers_directory = os.path.dirname(__file__)
+        user_workspace = os.path.join(controllers_directory, 'workspace', current_username)
+
+        if not os.path.exists(user_workspace):
+            os.makedirs(user_workspace)
+
+        for filename in os.listdir(user_workspace):
+            os.remove(os.path.join(user_workspace, filename))
+
+        file_name = os.path.join(user_workspace, 'temp.gz')
+        urllib.urlretrieve(resource['url'], file_name)
+
+        with tarfile.open(file_name) as tar:
+            tar.extractall(user_workspace)
+
+    ...
+
+    return render(request, 'ckan_app/plot.html', context)
+
+
+######################## ADD LOGIC TO PARSE NETCDF FILE AND FORMAT FOR HIGHCHARTS PLOT ##########################
+
+### controllers.py
+
+import netCDF4 as nc
+import datetime
+
+def plot(request, watershed_dataset, forecast_resource):
+    """
+    Controller for forecast plots
+    """
+    ...
+
+    timeseries = []
+
+        if response['success']:
+
+        ...
+
+        netcdf_file_path = ''
+        
+        for filename in os.listdir(user_workspace):
+            if '.nc' in filename:
+                netcdf_file_path = os.path.join(user_workspace, filename)
+                break
+        
+        data_nc = nc.Dataset(netcdf_file_path, mode="r")
+        
+        reach_index = 0
+
+        qout_dimensions = data_nc.variables['Qout'].dimensions
+
+        if qout_dimensions[0].lower() == 'time' and qout_dimensions[1].lower() == 'comid':
+            data_values = data_nc.variables['Qout'][:,reach_index]
+        elif qout_dimensions[0].lower() == 'comid' and qout_dimensions[1].lower() == 'time':
+            data_values = data_nc.variables['Qout'][reach_index,:]
+
+        start_date = datetime.datetime(int(year), int(month), int(day), int(hour))
+        timeseries = []
+        step = 0
+
+        for data_value in data_values.tolist():
+            hours = 6 * step
+            time = start_date + datetime.timedelta(hours=hours)
+            timeseries.append([time, data_value])
+            step += 1
+
+        data_nc.close()
+                
+
+
+    time_series_plot_object = HighChartsTimeSeries(
+                                title='Streamflow Forecast',
+                                y_axis_title='Streamflow',
+                                y_axis_units='cms',
+                                series=[{
+                                            'name': 'Streamflow',
+                                            'data': timeseries
+                                        }]
+    )
+
+    time_series_plot = PlotView(highcharts_object=time_series_plot_object,
+                                width='100%',
+                                height='500px')
+
+    context = {'title': title,
+               'pretty_time': pretty_time,
+               'forecast_number': forecast_number,
+               'time_series_plot': time_series_plot}
+
+    return render(request, 'ckan_app/plot.html', context)
+
+
+### plot.html
+
+{% extends "ckan_app/base.html" %}
+{% load tethys_gizmos %}
+
+{% block app_content %}
+    <h1>Streamflow Forecast</h1>
+    <h6>Watershed: {{ title }}</h6>
+    <h6>Issued at: {{ pretty_time }}</h6>
+    <h6>Forecast Number: {{ forecast_number }}</h6>
+
+    {% gizmo highcharts_plot_view time_series_plot %}
+
+{% endblock %}
+
+TEST WITH: 755 on erfp-nfie_ca_timally-south_ca
+
+######################## GIT TRAINING ####################
+
+$ cd ~/tethysdev/tethysapp-ckan_app
+$ git init
+$ git add .
+$ git status
+$ git commit -m "My first commit"
+$ git remote add origin https://github.com/<username>/<name>.git
+$ git push -u origin master
+$ git branch new_branch
+$ git checkout new_branch
+$ git status
+(Change the version in setup script)
+$ git status
+$ git add setup.py
+$ git status
+$ git commit -m "Advanced the version number"
+$ git push -u origin new_branch
+(Show diff using GitHub)
+$ git checkout master
+$ git merge new_branch
+$ git push
+
+
+
+
+
+
+
+
+
+
+
